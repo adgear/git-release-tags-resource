@@ -5,18 +5,6 @@ set -e -u
 exec 3>&1 # make stdout available as fd 3 for the result
 exec 1>&2 # redirect all output to stderr for logging
 
-#  _____ _____ _____  ______ _____ _      _____  ___   _____ _____   _____ ___  _____  _____
-# |  __ \_   _|_   _| | ___ \  ___| |    |  ___|/ _ \ /  ___|  ___| |_   _/ _ \|  __ \/  ___|
-# | |  \/ | |   | |   | |_/ / |__ | |    | |__ / /_\ \\ `--.| |__     | |/ /_\ \ |  \/\ `--.
-# | | __  | |   | |   |    /|  __|| |    |  __||  _  | `--. \  __|    | ||  _  | | __  `--. \
-# | |_\ \_| |_  | |   | |\ \| |___| |____| |___| | | |/\__/ / |___    | || | | | |_\ \/\__/ /
-#  \____/\___/  \_/   \_| \_\____/\_____/\____/\_| |_/\____/\____/    \_/\_| |_/\____/\____/
-#
-
-validate_url() {
-  if [[ $(wget -S --spider $1  2>&1 | grep 'HTTP/1.1 200 OK') ]]; then echo "true"; fi
-}
-
 tmpdir=${tmpdir:-/tmp}
 payload="$(mktemp "${tmpdir}/git-release-tags.XXXXXX")"
 cat > "${payload}" <&0
@@ -30,51 +18,19 @@ fi
 
 # From payload
 api_token=$( jq -r '.source.token // ""' < ${payload})
-# Use the access_token=? because the header value wasn't being passed in correctly, otherwise if not provided leave it out the token section from the requests
-if [ -z "$api_token" ]; then api_token_header=""; else api_token_header="access_token=$api_token&"; fi
 github_repo=$( jq -r '.source.repo // ""' < ${payload})
 github_owner=$( jq -r '.source.owner // ""' < ${payload})
-github_api_per_page=$( jq -r '.source.per_page // "20"' < ${payload})
 release_name=$( jq -r '.source.tag_prefix // ""' < ${payload})
-release_version_family=$( jq -r '.source.version_family // ""' < ${payload})
 release_version=$( jq -r '.version.version // "latest"' < ${payload})
-get_assets=$( jq -r '.source.get_assets // ""' < ${payload})
-get_source_tar=$( jq -r '.source.get_source_tar // "True"' < ${payload})
 version="$(jq -r '.version // ""' < "${payload}")"
+tag_name=$release_name$release_version
 
-release_file=$release_name$release_version
-file_url=https://github.com/${github_owner}/${github_repo}/archive/${release_file}.tar.gz
+file_url="https://api.github.com/repos/${github_owner}/${github_repo}/tarball/${tag_name}?access_token=$api_token"
 
-github_api_releases=$(curl --max-time 900 --connect-timeout 300 -s https://api.github.com/repos/${github_owner}/${github_repo}/releases/tags/${release_name}${release_version}?${api_token_header}per_page=${github_api_per_page})
-release_assets=$(echo $github_api_releases | jq -r '.assets')
-
-#echo $file_url
-if [ $(validate_url $file_url) ]
-then
-  echo "valid"
-  mkdir -p "${destination}"
-  # if we want assets, lets download them
-  if [ ! -z "$get_assets" ]
-  then
-    for row in $(echo "${release_assets}" | jq -r '.[] | @base64')
-    do
-      _jq() {
-       echo ${row} | base64 -d | jq -r ${1}
-      }
-      if [ "$get_assets" ]
-      then
-        wget -N -O "${destination}/$(_jq '.name')" "$(_jq '.browser_download_url')"
-        echo "$(_jq '.browser_download_url')" > ${destination}/$(_jq '.name')_asset_url
-      fi
-    done
-  fi
-  if [ "$get_source_tar" == "True" ]
-  then
-    wget -N -O "${destination}/source.tar.gz" "${file_url}"
-    echo "${file_url}" > "${destination}/url"
-  fi
-  echo "${release_version}" > "${destination}/version"
-fi
+mkdir -p "${destination}"
+curl -L "${file_url}" > "${destination}/source.tar.gz"
+echo "${file_url}" > "${destination}/url"
+echo "${release_version}" > "${destination}/version"
 
 jq -n "{
   version: ${version}
